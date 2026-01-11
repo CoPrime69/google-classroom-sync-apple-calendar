@@ -1,0 +1,30 @@
+# Google Classroom API
+google-auth-oauthlib==1.2.0
+google-auth-httplib2==0.2.0
+google-api-python-client==2.108.0
+
+# Apple Reminders (CalDAV)
+caldav==1.3.9
+
+# Database
+supabase==2.12.0
+websockets==14.1
+
+# Timezone handling
+pytz==2023.3
+
+# Email alerts
+resend==0.8.0
+
+# Environment variables
+python-dotenv==1.0.0
+
+# HTTP requests
+requests==2.31.0
+
+# Date/time utilities
+python-dateutil==2.8.2
+
+# Type stubs for better IDE support
+types-requests==2.31.0.20240106
+types-python-dateutil==2.8.19.20240106

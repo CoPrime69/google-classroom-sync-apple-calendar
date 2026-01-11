@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+.pnp/
+.pnp.js
+
+# Testing
+coverage/
+
+# Next.js
+.next/
+out/
+build/
+
+# Environment Variables
+.env
+.env.local
+.env.*.local
+
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDE
+.vscode/
+.idea/
+*.sublime-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Vercel
+.vercel
+
+# Build artifacts
+dist/
+*.tsbuildinfo

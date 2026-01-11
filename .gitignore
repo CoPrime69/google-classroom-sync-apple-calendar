@@ -1,0 +1,38 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment
+.env
+.env.local
+*.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node modules
+node_modules/
+
+# Build outputs
+dist/
+build/
+.next/
+out/
+
+# Logs
+*.log
+
+# Credentials
+credentials.json
+token.json
+
+# Vercel
+.vercel

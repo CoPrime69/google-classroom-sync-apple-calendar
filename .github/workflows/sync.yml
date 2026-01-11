@@ -1,0 +1,74 @@
+name: Google Classroom → Apple Reminders Sync
+
+on:
+  # Run 3 times daily at IST times: 12 PM, 6 PM, 10 PM
+  # IST is UTC+5:30, so convert to UTC:
+  # 12:00 PM IST = 06:30 AM UTC
+  # 06:00 PM IST = 12:30 PM UTC
+  # 10:00 PM IST = 04:30 PM UTC
+  schedule:
+    - cron: '30 6 * * *'   # 12:00 PM IST
+    - cron: '30 12 * * *'  # 06:00 PM IST
+    - cron: '30 16 * * *'  # 10:00 PM IST
+  
+  # Allow manual trigger
+  workflow_dispatch:
+
+# Prevent overlapping runs if GitHub delays jobs
+concurrency:
+  group: classroom-sync
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt
+      
+      - name: Run sync
+        env:
+          # Supabase
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          
+          # Google Classroom
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          
+          # Apple Reminders
+          APPLE_USERNAME: ${{ secrets.APPLE_USERNAME }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          CALDAV_URL: ${{ secrets.CALDAV_URL }}
+          
+          # Email Alerts
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+          
+          # Timezone
+          TIMEZONE: Asia/Kolkata
+          
+          # Notification Window
+          NOTIFICATION_START_HOUR: 7
+          NOTIFICATION_END_HOUR: 24
+          
+          # GitHub Actions context for error reporting
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: |
+          cd backend
+          python main.py
