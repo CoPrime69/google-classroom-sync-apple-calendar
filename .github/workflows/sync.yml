@@ -1,11 +1,6 @@
 name: Google Classroom → Apple Reminders Sync
 
 on:
-  # Run 3 times daily at IST times: 12 PM, 6 PM, 10 PM
-  # IST is UTC+5:30, so convert to UTC:
-  # 12:00 PM IST = 06:30 AM UTC
-  # 06:00 PM IST = 12:30 PM UTC
-  # 10:00 PM IST = 04:30 PM UTC
   schedule:
     - cron: '30 6 * * *'   # 12:00 PM IST
     - cron: '30 12 * * *'  # 06:00 PM IST
@@ -22,6 +17,7 @@ concurrency:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    environment: google-classroom-sync
     
     steps:
       - name: Checkout code
