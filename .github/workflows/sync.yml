@@ -17,6 +17,7 @@ concurrency:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    environment: google-classroom-sync
     
     steps:
       - name: Checkout code
