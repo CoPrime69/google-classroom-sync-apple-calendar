@@ -33,6 +33,31 @@ jobs:
           cd backend
           pip install -r requirements.txt
       
+      - name: Verify environment variables
+        run: |
+          echo "Checking environment variables..."
+          test -n "$SUPABASE_URL" && echo "✓ SUPABASE_URL set" || echo "✗ SUPABASE_URL missing"
+          test -n "$SUPABASE_KEY" && echo "✓ SUPABASE_KEY set" || echo "✗ SUPABASE_KEY missing"
+          test -n "$GOOGLE_CLIENT_ID" && echo "✓ GOOGLE_CLIENT_ID set" || echo "✗ GOOGLE_CLIENT_ID missing"
+          test -n "$GOOGLE_CLIENT_SECRET" && echo "✓ GOOGLE_CLIENT_SECRET set" || echo "✗ GOOGLE_CLIENT_SECRET missing"
+          test -n "$GOOGLE_REFRESH_TOKEN" && echo "✓ GOOGLE_REFRESH_TOKEN set" || echo "✗ GOOGLE_REFRESH_TOKEN missing"
+          test -n "$APPLE_USERNAME" && echo "✓ APPLE_USERNAME set" || echo "✗ APPLE_USERNAME missing"
+          test -n "$APPLE_PASSWORD" && echo "✓ APPLE_PASSWORD set" || echo "✗ APPLE_PASSWORD missing"
+          test -n "$CALDAV_URL" && echo "✓ CALDAV_URL set" || echo "✗ CALDAV_URL missing"
+          test -n "$RESEND_API_KEY" && echo "✓ RESEND_API_KEY set" || echo "✗ RESEND_API_KEY missing"
+          test -n "$ALERT_EMAIL" && echo "✓ ALERT_EMAIL set" || echo "✗ ALERT_EMAIL missing"
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          APPLE_USERNAME: ${{ secrets.APPLE_USERNAME }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          CALDAV_URL: ${{ secrets.CALDAV_URL }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+      
       - name: Run sync
         env:
           # Supabase
