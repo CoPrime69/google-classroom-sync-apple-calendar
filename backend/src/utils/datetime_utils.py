@@ -21,6 +21,10 @@ def calculate_alarms(due_date: datetime, current_time: datetime = None) -> List[
     if current_time is None:
         current_time = datetime.now(Config.TIMEZONE)
     
+    # Ensure due_date is timezone-aware (IST)
+    if due_date.tzinfo is None:
+        due_date = Config.TIMEZONE.localize(due_date)
+    
     alarms = []
     
     for interval_hours in Config.ALARM_INTERVALS:
@@ -49,13 +53,19 @@ def apply_time_window(dt: datetime) -> datetime:
     Returns:
         Adjusted datetime
     """
+    # Ensure dt is timezone-aware (IST)
+    if dt.tzinfo is None:
+        dt = Config.TIMEZONE.localize(dt)
+    
     # If before 7 AM, move to 7 AM same day
     if dt.hour < Config.NOTIFICATION_START_HOUR:
+        # Replace time while preserving timezone info
         return dt.replace(
             hour=Config.NOTIFICATION_START_HOUR,
             minute=0,
             second=0,
-            microsecond=0
+            microsecond=0,
+            tzinfo=dt.tzinfo
         )
     
     # If after midnight (next day), keep as is
@@ -121,25 +131,36 @@ def get_ist_now() -> datetime:
     return datetime.now(Config.TIMEZONE)
 
 
+IST = Config.TIMEZONE  # Asia/Kolkata
+
 def parse_iso_datetime(iso_string: str) -> datetime:
     """
-    Parse ISO datetime string to timezone-aware datetime.
-    Fixes Google Classroom's quirk: they store "due by end of day" as 12:59 UTC
-    which becomes 18:29 IST. We convert this to 23:59 IST (actual end of day).
-    
-    Args:
-        iso_string: ISO format datetime string
-        
-    Returns:
-        Timezone-aware datetime (adjusted to 23:59 IST if it's Google's default 18:29)
+    Parse Google Classroom ISO datetime safely.
+
+    Handles:
+    1. Explicit UTC timestamps (Z / +00:00)
+    2. Local IST timestamps without timezone
+    3. Google's 12:59 UTC = end-of-day quirk
     """
+
+    # Parse ISO string
     dt = datetime.fromisoformat(iso_string.replace('Z', '+00:00'))
-    dt_ist = dt.astimezone(Config.TIMEZONE)
-    
-    # CRITICAL FIX: Google Classroom stores "due by end of day" as 12:59 UTC
-    # which becomes 18:29 IST (6:29 PM). Convert to actual end of day (23:59 IST)
+
+    # CASE 1: Timezone-aware → convert to IST
+    if dt.tzinfo is not None:
+        dt_ist = dt.astimezone(IST)
+    else:
+        # CASE 2: Naive datetime → Google already means IST
+        dt_ist = IST.localize(dt)
+
+    # Google Classroom "end of day" bug:
+    # 12:59 UTC → 18:29 IST → should mean 23:59 IST
     if dt_ist.hour == 18 and dt_ist.minute == 29:
-        # Replace with 11:59 PM IST (end of day)
-        dt_ist = dt_ist.replace(hour=23, minute=59, second=0)
-    
+        dt_ist = dt_ist.replace(
+            hour=23,
+            minute=59,
+            second=0,
+            microsecond=0
+        )
+
     return dt_ist

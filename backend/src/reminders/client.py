@@ -289,9 +289,7 @@ class RemindersClient:
         Returns:
             VEVENT string
         """
-        # CRITICAL FIX: Convert UTC to IST
-        # Google Classroom gives due dates in UTC
-        # We need to convert to IST for display
+        # CRITICAL FIX: Ensure all datetimes are timezone-aware IST
         if due_date.tzinfo is None:
             # If no timezone, assume IST
             due_date = Config.TIMEZONE.localize(due_date)
@@ -299,7 +297,7 @@ class RemindersClient:
             # If has timezone (likely UTC from Google), convert to IST
             due_date = due_date.astimezone(Config.TIMEZONE)
         
-        # Format in IST for iCalendar
+        # Format in IST for iCalendar (without timezone suffix - using TZID parameter)
         due_str = due_date.strftime('%Y%m%dT%H%M%S')
         dtstamp_utc = datetime.now(Config.TIMEZONE).astimezone(pytz.UTC)
         dtstamp_str = dtstamp_utc.strftime('%Y%m%dT%H%M%SZ')
@@ -331,6 +329,12 @@ class RemindersClient:
         
         # Add alarms
         for alarm_time in alarms:
+            # Ensure alarm_time is timezone-aware IST
+            if alarm_time.tzinfo is None:
+                alarm_time = Config.TIMEZONE.localize(alarm_time)
+            else:
+                alarm_time = alarm_time.astimezone(Config.TIMEZONE)
+            
             # Calculate trigger time relative to due date
             trigger_delta = alarm_time - due_date
             trigger_seconds = int(trigger_delta.total_seconds())
