@@ -392,14 +392,21 @@ class SyncEngine:
     def _cancel_reminder(self, existing: Dict[str, Any], course: Dict[str, Any]):
         """Cancel/delete reminder"""
         reminder_uid = existing.get('reminder_uid')
+        notes_fingerprint = existing.get('reminder_notes_fingerprint')
+        assignment_id = existing.get('id')
         
         # Get calendar_name from DB or fall back to course name
         calendar_name = course.get('calendar_name') or course['name']
         
-        if reminder_uid:
+        # Use UID, notes fingerprint, and assignment_id so that all
+        # related events (main + 24h/48h dummy events) are deleted even
+        # if the main UID is missing or has changed.
+        if reminder_uid or notes_fingerprint or assignment_id:
             self.reminders.delete_reminder(
                 list_name=calendar_name,
-                reminder_uid=reminder_uid
+                reminder_uid=reminder_uid,
+                notes_fingerprint=notes_fingerprint,
+                assignment_id=str(assignment_id) if assignment_id is not None else None
             )
         
         # Clean up database alarm rows to prevent stale state

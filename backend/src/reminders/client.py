@@ -158,9 +158,9 @@ class RemindersClient:
         
         Args:
             list_name: Calendar name
-            reminder_uid: Existing event UID
+            reminder_uid: Existing main event UID
             title: New title
-            notes: New assignment ID
+            notes: Reminder notes fingerprint / assignment identifier
             due_date: New due date
             alarms: New alarm list
             color: Calendar color
@@ -168,8 +168,14 @@ class RemindersClient:
             category_label: Category label
             full_assignment_title: Full assignment title
         """
-        # Delete old event and all dummy events
-        self.delete_reminder(list_name, reminder_uid)
+        # Delete old main event and all dummy events for this assignment
+        # Use both UID and notes fingerprint so 24h/48h dummy events that
+        # share the same notes are also removed.
+        self.delete_reminder(
+            list_name=list_name,
+            reminder_uid=reminder_uid,
+            notes_fingerprint=notes
+        )
         
         # Recreate with same UID (this will create main + dummy events)
         calendar = self.get_or_create_list(list_name, color)
@@ -220,24 +226,39 @@ class RemindersClient:
                 )
                 calendar.save_event(dummy_event_24h)
     
-    def delete_reminder(self, list_name: str, reminder_uid: str):
-        """
-        Delete a calendar event by UID.
+    def delete_reminder(
+        self,
+        list_name: str,
+        reminder_uid: Optional[str],
+        notes_fingerprint: Optional[str] = None,
+        assignment_id: Optional[str] = None
+    ):
+        """Delete calendar events associated with an assignment.
+        
+        This removes the main VEVENT (identified by UID) as well as any
+        24h/48h dummy events that share the same notes fingerprint or
+        contain the assignment_id in their DESCRIPTION.
         
         Args:
             list_name: Calendar name
-            reminder_uid: Event UID to delete
+            reminder_uid: Main event UID (may be None if lost)
+            notes_fingerprint: Notes fingerprint stored in DB
+            assignment_id: Classroom assignment ID (string)
         """
         try:
             calendar = self.get_or_create_list(list_name)
             events = calendar.events()
             
             for event in events:
-                if reminder_uid in event.data:
+                data = event.data or ""
+                match_uid = bool(reminder_uid and reminder_uid in data)
+                match_fingerprint = bool(notes_fingerprint and notes_fingerprint in data)
+                match_assignment = bool(assignment_id and assignment_id in data)
+                
+                if match_uid or match_fingerprint or match_assignment:
                     event.delete()
-                    break
         except Exception as e:
-            print(f"Error deleting event {reminder_uid}: {e}")
+            print(f"Error deleting events for UID {reminder_uid}: {e}")
     
     def find_reminder_by_notes(self, list_name: str, assignment_id: str) -> Optional[str]:
         """
