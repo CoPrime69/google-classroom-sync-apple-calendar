@@ -172,10 +172,6 @@ class SyncEngine:
         """Handle existing assignment - check for updates"""
         assignment_id = existing['id']
         
-        # Skip if marked dead (CRITICAL: prevents stale extension logic)
-        if existing.get('is_dead'):
-            return
-        
         new_due_date = parse_iso_datetime(coursework['due_date'])
         old_due_date = parse_iso_datetime(existing['due_date']) if existing.get('due_date') else None
         last_seen_due_date = parse_iso_datetime(existing['last_seen_due_date']) if existing.get('last_seen_due_date') else old_due_date
@@ -212,6 +208,36 @@ class SyncEngine:
             self.db.mark_assignment_dead(assignment_id)
             self._cancel_reminder(existing, course)
             self.stats['reminders_cancelled'] += 1
+            return
+
+        # At this point: not submitted and not past deadline.
+        # If this assignment was previously marked dead (likely due to a
+        # prior submission that has now been undone), reactivate it and
+        # recreate the calendar reminder.
+        if existing.get('is_dead'):
+            print(f"   🔁 Reactivated (unsubmitted): {coursework['title']}")
+
+            # Determine category name similar to new-assignment path
+            category_name = existing.get('category_name')
+            if not category_name and coursework.get('category_id'):
+                category = self.db.get_category(coursework['category_id'])
+                if category:
+                    category_name = category['name']
+
+            # Update DB: mark alive and reset post-deadline check flag
+            assignment_data = {
+                **coursework,
+                'category_name': category_name,
+                'last_seen_due_date': coursework['due_date'],
+                'submission_checked_post_deadline': False,
+                'is_dead': False,
+                'submission_status': submission_status,
+            }
+            self.db.upsert_assignment(assignment_data)
+
+            # Recreate reminder from scratch
+            self._create_reminder(coursework, course, new_due_date, category_name)
+            self.stats['reminders_created'] += 1
             return
         
         # Check for deadline extension (compare against last_seen_due_date)
