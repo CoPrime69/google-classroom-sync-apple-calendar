@@ -88,7 +88,7 @@ class ClassroomClient:
     def get_submission_status(self, course_id: str, coursework_id: str) -> str:
         """
         Get submission status for a specific assignment.
-        Returns: 'SUBMITTED', 'NOT_SUBMITTED', or 'TURNED_IN'
+        Returns: 'SUBMITTED' or 'NOT_SUBMITTED'
         """
         try:
             # Get student submissions for this coursework
@@ -106,7 +106,9 @@ class ClassroomClient:
             state = submission.get('state', 'NEW')
             
             # Map Google Classroom states to our simplified states
-            if state in ['TURNED_IN', 'RETURNED', 'RECLAIMED_BY_STUDENT']:
+            #   TURNED_IN, RETURNED          -> SUBMITTED
+            #   RECLAIMED_BY_STUDENT, NEW   -> NOT_SUBMITTED (unsubmitted)
+            if state in ['TURNED_IN', 'RETURNED']:
                 return 'SUBMITTED'
             else:
                 return 'NOT_SUBMITTED'
@@ -147,9 +149,14 @@ class ClassroomClient:
             minute = time_info.get('minutes', 59)
             
             if year and month and day:
-                # Create datetime in IST
-                due_date = datetime(year, month, day, hour, minute, 0)
-                due_date = Config.TIMEZONE.localize(due_date)
+                # Google returns dueDate/dueTime in the course's timezone, but
+                # in practice for this setup it behaves like UTC. To ensure
+                # Classroom's wall-clock time (e.g. 11 PM) matches the
+                # student's IST calendar, interpret the raw time as UTC and
+                # convert to our configured timezone (Asia/Kolkata).
+                naive_dt = datetime(year, month, day, hour, minute, 0)
+                dt_utc = naive_dt.replace(tzinfo=pytz.UTC)
+                due_date = dt_utc.astimezone(Config.TIMEZONE)
         
         return {
             'id': coursework['id'],

@@ -50,7 +50,9 @@ NOTIFICATION_END_HOUR=24
 ### 1.3 Install Dependencies
 
 ```bash
-pip install -r requirements.txt
+py -3.11 -m venv venv311
+.\venv\Scripts\activate
+python -m pip install -r requirements.txt
 ```
 
 ### 1.4 Test Credentials

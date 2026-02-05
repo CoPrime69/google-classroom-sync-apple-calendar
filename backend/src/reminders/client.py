@@ -310,16 +310,17 @@ class RemindersClient:
         Returns:
             VEVENT string
         """
-        # CRITICAL FIX: Ensure all datetimes are timezone-aware IST
+        # Ensure all datetimes are interpreted in configured timezone (IST)
         if due_date.tzinfo is None:
-            # If no timezone, assume IST
             due_date = Config.TIMEZONE.localize(due_date)
         else:
-            # If has timezone (likely UTC from Google), convert to IST
             due_date = due_date.astimezone(Config.TIMEZONE)
-        
-        # Format in IST for iCalendar (without timezone suffix - using TZID parameter)
-        due_str = due_date.strftime('%Y%m%dT%H%M%S')
+
+        # IMPORTANT: Use "floating" local times (no TZID) so that
+        # Apple Calendar shows the same wall-clock time (e.g. 11 PM)
+        # without applying additional timezone shifts.
+        local_due = due_date.replace(tzinfo=None)
+        due_str = local_due.strftime('%Y%m%dT%H%M%S')
         dtstamp_utc = datetime.now(Config.TIMEZONE).astimezone(pytz.UTC)
         dtstamp_str = dtstamp_utc.strftime('%Y%m%dT%H%M%SZ')
         
@@ -341,8 +342,8 @@ class RemindersClient:
             'BEGIN:VEVENT',
             f'UID:{uid}',
             f'DTSTAMP:{dtstamp_str}',
-            f'DTSTART;TZID=Asia/Kolkata:{dtstart_str}',
-            f'DTEND;TZID=Asia/Kolkata:{dtend_str}',
+            f'DTSTART:{dtstart_str}',
+            f'DTEND:{dtend_str}',
             f'SUMMARY:{title}',
             f'DESCRIPTION:{description}',
             'STATUS:CONFIRMED',
