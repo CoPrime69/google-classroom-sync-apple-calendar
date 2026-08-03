@@ -3,42 +3,46 @@ Utility functions for date/time calculations and alarm scheduling.
 """
 
 from datetime import datetime, timedelta
-from typing import List
+from typing import List, Tuple
 from ..config import Config
 
 
-def calculate_alarms(due_date: datetime, current_time: datetime = None) -> List[datetime]:
+def calculate_alarms(due_date: datetime, current_time: datetime = None) -> List[Tuple[int, datetime]]:
     """
     Calculate alarm times based on due date and notification window.
-    
+
     Args:
         due_date: Assignment due date
         current_time: Current time (defaults to now)
-        
+
     Returns:
-        List of alarm datetimes
+        List of (interval_hours, alarm_datetime) tuples, chronologically
+        ascending. Some intervals may be absent (filtered out) if they'd
+        fall in the past - callers must not assume a fixed-length list or
+        rely on positional indexing to recover which interval an alarm
+        belongs to; use the interval_hours label instead.
     """
     if current_time is None:
         current_time = datetime.now(Config.TIMEZONE)
-    
+
     # Ensure due_date is timezone-aware (IST)
     if due_date.tzinfo is None:
         due_date = Config.TIMEZONE.localize(due_date)
-    
+
     alarms = []
-    
+
     for interval_hours in Config.ALARM_INTERVALS:
         alarm_time = due_date - timedelta(hours=interval_hours)
-        
+
         # Skip if alarm is in the past
         if alarm_time <= current_time:
             continue
-        
+
         # Apply time window constraints
         alarm_time = apply_time_window(alarm_time)
-        
-        alarms.append(alarm_time)
-    
+
+        alarms.append((interval_hours, alarm_time))
+
     return alarms
 
 

@@ -9,6 +9,11 @@ on:
   # Allow manual trigger
   workflow_dispatch:
 
+# This workflow only checks out the repo and calls external APIs; it
+# never writes back to GitHub, so the default token needs read-only scope.
+permissions:
+  contents: read
+
 # Prevent overlapping runs if GitHub delays jobs
 concurrency:
   group: classroom-sync

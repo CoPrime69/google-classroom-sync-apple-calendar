@@ -7,10 +7,30 @@ Note: Switched from VTODO (Reminders) to VEVENT (Calendar) for iOS compatibility
 import caldav  # type: ignore
 from caldav.elements import dav, cdav  # type: ignore
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Tuple
 from ..config import Config
 import uuid
 import pytz
+
+
+def _escape_ical_text(value: str) -> str:
+    """Escape a string for use in an iCalendar TEXT value (RFC 5545 §3.3.11).
+
+    Without this, a title/description containing a raw newline, backslash,
+    comma, or semicolon can break out of its property line and inject
+    additional iCalendar content (e.g. a forged BEGIN:VALARM block).
+    """
+    if not value:
+        return value
+    return (
+        value
+        .replace('\\', '\\\\')
+        .replace(';', '\\;')
+        .replace(',', '\\,')
+        .replace('\r\n', '\\n')
+        .replace('\n', '\\n')
+        .replace('\r', '\\n')
+    )
 
 
 class RemindersClient:
@@ -58,7 +78,7 @@ class RemindersClient:
         title: str,
         notes: str,
         due_date: datetime,
-        alarms: List[datetime],
+        alarms: List[Tuple[int, datetime]],
         color: str = '#007AFF',
         course_code: str = None,
         category_label: str = None,
@@ -67,34 +87,40 @@ class RemindersClient:
         """
         Create calendar events with alarms.
         Creates main event + dummy events for 48h/24h alarms (iOS limit: 2 alarms/event).
-        
+
         Args:
             list_name: Calendar name
             title: Event title (will be formatted as [LABEL] - course_code)
             notes: Assignment ID for tracking
             due_date: Due date/time
-            alarms: List of alarm datetimes (sorted: 48h, 24h, 6h, 2h)
+            alarms: List of (interval_hours, alarm_datetime) tuples, chronologically
+                ascending. Some intervals (e.g. 48h) may be missing if they'd fall
+                in the past - always look them up by interval_hours, never by
+                position, since a missing early interval shifts every later index.
             color: Calendar color
             course_code: Course code for title
             category_label: Category label (e.g., "ASSIGNMENTS")
             full_assignment_title: Full assignment title for notes
-            
+
         Returns:
             Main event UID
         """
         calendar = self.get_or_create_list(list_name, color)
-        
+
         # Format title: [LABEL] - course_code (use calendar_name if available, else course_code, else list_name)
         display_name = course_code or list_name
         formatted_title = f"[{category_label or 'ASSIGNMENT'}] - {display_name}"
-        
+
         # Generate UID
         event_uid = str(uuid.uuid4())
-        
+
+        alarms_by_interval = dict(alarms)
+        alarm_times = [alarm_time for _, alarm_time in alarms]
+
         # iOS Calendar supports max 2 alarms per event
-        # Create main event with 6h and 2h alarms
-        main_alarms = alarms[-2:] if len(alarms) >= 2 else alarms  # Last 2 (6h, 2h)
-        
+        # Create main event with the 2 alarms closest to the due date (6h, 2h)
+        main_alarms = alarm_times[-2:] if len(alarm_times) >= 2 else alarm_times
+
         # Build main VEVENT
         vevent = self._build_vevent(
             uid=event_uid,
@@ -104,40 +130,39 @@ class RemindersClient:
             alarms=main_alarms,
             full_assignment_title=full_assignment_title
         )
-        
+
         # Create main event
         calendar.save_event(vevent)
-        
-        # Create dummy events for 48h and 24h alarms
-        if len(alarms) > 2:
-            # 48h alarm (2 days before)
-            if len(alarms) >= 4:
-                alarm_48h = alarms[0]
-                dummy_uid_48h = str(uuid.uuid4())
-                dummy_event_48h = self._build_vevent(
-                    uid=dummy_uid_48h,
-                    title=f"{formatted_title} [48h Alert]",
-                    notes=notes,
-                    due_date=alarm_48h,  # Event at alarm time
-                    alarms=[alarm_48h],  # 1 alarm at event time
-                    full_assignment_title=full_assignment_title
-                )
-                calendar.save_event(dummy_event_48h)
-            
-            # 24h alarm (1 day before)
-            if len(alarms) >= 3:
-                alarm_24h = alarms[1]
-                dummy_uid_24h = str(uuid.uuid4())
-                dummy_event_24h = self._build_vevent(
-                    uid=dummy_uid_24h,
-                    title=f"{formatted_title} [24h Alert]",
-                    notes=notes,
-                    due_date=alarm_24h,
-                    alarms=[alarm_24h],
-                    full_assignment_title=full_assignment_title
-                )
-                calendar.save_event(dummy_event_24h)
-        
+
+        # Create dummy events for 48h and 24h alarms, looked up by their
+        # actual interval label rather than list position.
+        alarm_48h = alarms_by_interval.get(48)
+        alarm_24h = alarms_by_interval.get(24)
+
+        if alarm_48h is not None:
+            dummy_uid_48h = str(uuid.uuid4())
+            dummy_event_48h = self._build_vevent(
+                uid=dummy_uid_48h,
+                title=f"{formatted_title} [48h Alert]",
+                notes=notes,
+                due_date=alarm_48h,  # Event at alarm time
+                alarms=[alarm_48h],  # 1 alarm at event time
+                full_assignment_title=full_assignment_title
+            )
+            calendar.save_event(dummy_event_48h)
+
+        if alarm_24h is not None:
+            dummy_uid_24h = str(uuid.uuid4())
+            dummy_event_24h = self._build_vevent(
+                uid=dummy_uid_24h,
+                title=f"{formatted_title} [24h Alert]",
+                notes=notes,
+                due_date=alarm_24h,
+                alarms=[alarm_24h],
+                full_assignment_title=full_assignment_title
+            )
+            calendar.save_event(dummy_event_24h)
+
         return event_uid
     
     def update_reminder(
@@ -147,7 +172,7 @@ class RemindersClient:
         title: str,
         notes: str,
         due_date: datetime,
-        alarms: List[datetime],
+        alarms: List[Tuple[int, datetime]],
         color: str = '#007AFF',
         course_code: str = None,
         category_label: str = None,
@@ -183,10 +208,13 @@ class RemindersClient:
         # Format title
         display_name = course_code or list_name
         formatted_title = f"[{category_label or 'ASSIGNMENT'}] - {display_name}"
-        
-        # Create main event with 6h and 2h alarms
-        main_alarms = alarms[-2:] if len(alarms) >= 2 else alarms
-        
+
+        alarms_by_interval = dict(alarms)
+        alarm_times = [alarm_time for _, alarm_time in alarms]
+
+        # Create main event with the 2 alarms closest to the due date (6h, 2h)
+        main_alarms = alarm_times[-2:] if len(alarm_times) >= 2 else alarm_times
+
         vevent = self._build_vevent(
             uid=reminder_uid,
             title=formatted_title,
@@ -195,36 +223,37 @@ class RemindersClient:
             alarms=main_alarms,
             full_assignment_title=full_assignment_title
         )
-        
+
         calendar.save_event(vevent)
-        
-        # Recreate dummy events for 48h and 24h
-        if len(alarms) > 2:
-            if len(alarms) >= 4:
-                alarm_48h = alarms[0]
-                dummy_uid_48h = str(uuid.uuid4())
-                dummy_event_48h = self._build_vevent(
-                    uid=dummy_uid_48h,
-                    title=f"{formatted_title} [48h Alert]",
-                    notes=notes,
-                    due_date=alarm_48h,
-                    alarms=[alarm_48h],
-                    full_assignment_title=full_assignment_title
-                )
-                calendar.save_event(dummy_event_48h)
-            
-            if len(alarms) >= 3:
-                alarm_24h = alarms[1]
-                dummy_uid_24h = str(uuid.uuid4())
-                dummy_event_24h = self._build_vevent(
-                    uid=dummy_uid_24h,
-                    title=f"{formatted_title} [24h Alert]",
-                    notes=notes,
-                    due_date=alarm_24h,
-                    alarms=[alarm_24h],
-                    full_assignment_title=full_assignment_title
-                )
-                calendar.save_event(dummy_event_24h)
+
+        # Recreate dummy events for 48h and 24h, looked up by their actual
+        # interval label rather than list position.
+        alarm_48h = alarms_by_interval.get(48)
+        alarm_24h = alarms_by_interval.get(24)
+
+        if alarm_48h is not None:
+            dummy_uid_48h = str(uuid.uuid4())
+            dummy_event_48h = self._build_vevent(
+                uid=dummy_uid_48h,
+                title=f"{formatted_title} [48h Alert]",
+                notes=notes,
+                due_date=alarm_48h,
+                alarms=[alarm_48h],
+                full_assignment_title=full_assignment_title
+            )
+            calendar.save_event(dummy_event_48h)
+
+        if alarm_24h is not None:
+            dummy_uid_24h = str(uuid.uuid4())
+            dummy_event_24h = self._build_vevent(
+                uid=dummy_uid_24h,
+                title=f"{formatted_title} [24h Alert]",
+                notes=notes,
+                due_date=alarm_24h,
+                alarms=[alarm_24h],
+                full_assignment_title=full_assignment_title
+            )
+            calendar.save_event(dummy_event_24h)
     
     def delete_reminder(
         self,
@@ -329,11 +358,17 @@ class RemindersClient:
         if full_assignment_title:
             description_parts.append(full_assignment_title)
         description = '; '.join(description_parts)
-        
+
+        # Escape free-text fields so embedded newlines/special chars from
+        # Classroom-supplied titles can't break out of their property line
+        # and inject extra iCalendar content.
+        escaped_title = _escape_ical_text(title)
+        escaped_description = _escape_ical_text(description)
+
         # For calendar events, use due date as both start and end
         dtstart_str = due_str
         dtend_str = due_str
-        
+
         # Build VEVENT
         vevent_lines = [
             'BEGIN:VCALENDAR',
@@ -344,8 +379,8 @@ class RemindersClient:
             f'DTSTAMP:{dtstamp_str}',
             f'DTSTART:{dtstart_str}',
             f'DTEND:{dtend_str}',
-            f'SUMMARY:{title}',
-            f'DESCRIPTION:{description}',
+            f'SUMMARY:{escaped_title}',
+            f'DESCRIPTION:{escaped_description}',
             'STATUS:CONFIRMED',
         ]
         
@@ -368,7 +403,7 @@ class RemindersClient:
                 'BEGIN:VALARM',
                 'ACTION:DISPLAY',
                 f'TRIGGER:{trigger_iso}',
-                f'DESCRIPTION:{title}',
+                f'DESCRIPTION:{escaped_title}',
                 'END:VALARM',
             ])
         
