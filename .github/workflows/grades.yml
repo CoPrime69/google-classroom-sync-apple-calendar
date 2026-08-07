@@ -1,0 +1,72 @@
+name: Notion Grade Sync
+
+# Separate from sync.yml on purpose. Grades and calendar reminders fail for
+# different reasons: a Notion outage must not stop assignment reminders being
+# created, and a grade bug must not trigger the calendar sync's failure alert.
+on:
+  schedule:
+    - cron: '0 15 * * *'   # 08:30 PM IST, once daily
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: grade-sync
+  cancel-in-progress: true
+
+jobs:
+  grades:
+    runs-on: ubuntu-latest
+    environment: google-classroom-sync
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt
+
+      - name: Run calculator tests
+        # The grade rules are pure functions, so they are cheap to verify
+        # before touching live data.
+        run: |
+          cd backend
+          pip install -r requirements-dev.txt
+          python -m pytest tests/ -q
+
+      - name: Run grade sync
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+
+          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
+          NOTION_COURSES_DB_ID: ${{ secrets.NOTION_COURSES_DB_ID }}
+          NOTION_CATEGORIES_DB_ID: ${{ secrets.NOTION_CATEGORIES_DB_ID }}
+          NOTION_MARKS_DB_ID: ${{ secrets.NOTION_MARKS_DB_ID }}
+
+          # Config.validate() checks the calendar-sync credentials too, so they
+          # are supplied even though the grade job never calls Classroom or
+          # CalDAV.
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          APPLE_USERNAME: ${{ secrets.APPLE_USERNAME }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          CALDAV_URL: ${{ secrets.CALDAV_URL }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+
+          TIMEZONE: Asia/Kolkata
+        run: |
+          cd backend
+          python grades_main.py
