@@ -11,12 +11,17 @@ Direction of travel, one writer per field:
 
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from ..config import Config
 from ..database import Database
 from .calculator import Component, CourseResult, Group, evaluate_course
-from .notion import NotionClient
+from .notion import (COMPONENTS_DB_TITLE, MARKS_DB_TITLE, COMPONENT_PROPERTIES,
+                     MARK_PROPERTIES, NotionClient)
+
+
+def _key(value: Optional[str]) -> str:
+    return (value or "").strip().lower()
 
 
 class GradeSync:
@@ -26,65 +31,69 @@ class GradeSync:
         self.notion = notion or NotionClient(
             token=Config.NOTION_API_KEY,
             courses_db=Config.NOTION_COURSES_DB_ID,
-            categories_db=Config.NOTION_CATEGORIES_DB_ID,
-            marks_db=Config.NOTION_MARKS_DB_ID,
+            progress_db=Config.NOTION_PROGRESS_DB_ID,
         )
         self.stats = {"courses": 0, "groups": 0, "components": 0, "snapshots": 0}
         self.problems: List[str] = []
+        self.failures = 0
 
     # ------------------------------------------------------------------ read
 
-    def _load(self, semester: str):
-        """Walk Notion's relations into calculator inputs, keyed by course page."""
-        courses = [c for c in self.notion.fetch_courses() if not c["archived"]]
-        categories = [c for c in self.notion.fetch_categories() if not c["archived"]]
-        marks = [m for m in self.notion.fetch_marks() if not m["archived"]]
+    def _groups_for(self, course_code: str, page_id: str) -> List[Group]:
+        """Read one course's own Components and Marks tables."""
+        children = self.notion.child_databases(page_id)
 
-        wanted = (semester or "").strip().lower()
-        in_scope = {
-            c["page_id"]: c for c in courses
-            if (c["semester"] or "").strip().lower() == wanted
-        }
-        skipped = len(courses) - len(in_scope)
-        if skipped:
-            print(f"   {skipped} course(s) from other semesters ignored")
+        components_db = children.get(COMPONENTS_DB_TITLE)
+        if not components_db:
+            # Self-heal: a course added by hand in Notion has no child tables
+            # until the job makes them, so it is created rather than reported.
+            components_db = self.notion.ensure_child_db(
+                page_id, COMPONENTS_DB_TITLE, COMPONENT_PROPERTIES,
+                "Components for this course. Counts = how many contribute; "
+                "leave blank when all of them do.")
+            print(f"     created missing {COMPONENTS_DB_TITLE} table")
 
-        for course in courses:
-            if not course["course"]:
-                self.problems.append(
-                    f"course row {course['page_id'][:8]} has no Course name")
-            elif not course["semester"]:
-                self.problems.append(
-                    f"{course['course']}: no Semester set, so it never syncs")
+        marks_db = children.get(MARKS_DB_TITLE)
+        if not marks_db:
+            marks_db = self.notion.ensure_child_db(
+                page_id, MARKS_DB_TITLE, MARK_PROPERTIES,
+                "Marks for this course. Component must match a row in the "
+                "Components table above. Leave Score empty until marked.")
+            print(f"     created missing {MARKS_DB_TITLE} table")
 
-        # Marks grouped under their category.
-        by_category: Dict[str, List[Dict[str, Any]]] = {}
+        components = self.notion.fetch_components(components_db)
+        marks = self.notion.fetch_marks(marks_db)
+
+        by_component: Dict[str, List[dict]] = {}
+        # Nameless component rows are reported separately below. Including
+        # them here would put "" in `known`, so a mark with a blank Component
+        # would look matched and then be dropped without any warning.
+        known = {_key(c["component"]) for c in components if c["component"]}
         for mark in marks:
-            if not mark["category_page_id"]:
+            name = _key(mark["component"])
+            if name not in known:
                 self.problems.append(
-                    f"mark '{mark['item'] or mark['page_id'][:8]}' is not linked "
-                    f"to a category")
+                    f"{course_code}: mark '{mark['item'] or 'unnamed'}' names "
+                    f"component '{mark['component']}', which is not in this "
+                    f"course's Components table")
                 continue
-            by_category.setdefault(mark["category_page_id"], []).append(mark)
+            by_component.setdefault(name, []).append(mark)
 
-        # Categories grouped under their course.
-        grouped: Dict[str, List[Group]] = {}
-        for category in categories:
-            parent = category["course_page_id"]
-            if not parent:
+        groups = []
+        for component in components:
+            if not component["component"]:
                 self.problems.append(
-                    f"category '{category['category']}' is not linked to a course")
+                    f"{course_code}: a component row has no name")
                 continue
-            if parent not in in_scope:
-                continue
-
-            items = by_category.get(category["page_id"], [])
-            grouped.setdefault(parent, []).append(Group(
-                key=category["page_id"],
-                name=category["category"] or "(unnamed)",
-                weight=category["weight"] or 0.0,
-                counted=(int(category["counts"])
-                         if category["counts"] is not None else None),
+            # pop, not get: two rows with the same name would otherwise each
+            # take the same marks and double-count the whole group.
+            items = by_component.pop(_key(component["component"]), [])
+            groups.append(Group(
+                key=component["page_id"],
+                name=component["component"],
+                weight=component["weight"] or 0.0,
+                counted=(int(component["counts"])
+                         if component["counts"] is not None else None),
                 components=tuple(
                     Component(
                         key=m["page_id"],
@@ -95,31 +104,27 @@ class GradeSync:
                     for m in items
                 ),
             ))
-
-        return in_scope, grouped
+        return groups
 
     # ----------------------------------------------------------------- write
 
-    def _course_id_for(self, code: str) -> Optional[str]:
-        """Link to the Classroom-synced course when one exists.
+    def _course_ids(self) -> Dict[str, str]:
+        """Map course_code -> courses.id, built once per run.
 
-        Absence is normal, not an error: a course may be taught offline or
-        simply not posted to Classroom, and its grades are typed by hand
-        either way.
+        Linking to the Classroom-synced course is a convenience; absence is
+        normal, because a course may be taught offline or simply not posted to
+        Classroom, and its grades are typed by hand either way.
         """
         rows = self.db.client.table("courses").select("id,course_code").execute().data
-        for row in rows:
-            if (row.get("course_code") or "").strip().lower() == code.strip().lower():
-                return row["id"]
-        return None
+        return {_key(r["course_code"]): r["id"] for r in rows if r.get("course_code")}
 
     def _persist(self, code: str, semester: str, result: CourseResult,
-                 counts_by_page: Dict[str, Optional[int]]) -> None:
-        course_id = self._course_id_for(code)
+                 counts_by_page: Dict[str, Optional[int]],
+                 course_id: Optional[str]) -> None:
         now = datetime.now(timezone.utc).isoformat()
 
         for group in result.groups:
-            self.db.client.table("grade_groups").upsert({
+            stored = self.db.client.table("grade_groups").upsert({
                 "course_code": code,
                 "course_id": course_id,
                 "semester": semester,
@@ -129,12 +134,14 @@ class GradeSync:
                 "counted": counts_by_page.get(group.key),
                 "archived": False,
                 "updated_at": now,
-            }, on_conflict="notion_page_id").execute()
+            }, on_conflict="notion_page_id").execute().data
             self.stats["groups"] += 1
 
-            stored = (self.db.client.table("grade_groups").select("id")
-                      .eq("notion_page_id", group.key).execute().data)
+            # postgrest returns the upserted row by default, so the id is
+            # already here; selecting it again was a wasted round-trip.
             if not stored:
+                self.problems.append(
+                    f"{code}: could not persist component {group.name!r}")
                 continue
 
             for component in group.components:
@@ -155,14 +162,11 @@ class GradeSync:
 
     def _snapshot(self, code: str, course_id: Optional[str], semester: str,
                   result: CourseResult) -> None:
-        """Append a snapshot only when the numbers actually moved.
-
-        Running several times a day would otherwise bury the history in
-        identical rows.
-        """
+        """Append only when the numbers moved, so a repeatedly scheduled job
+        does not bury the history in identical rows."""
         previous = (self.db.client.table("grade_snapshots")
                     .select("earned_weight,graded_weight")
-                    .eq("course_code", code)
+                    .eq("course_code", code).eq("semester", semester)
                     .order("id", desc=True).limit(1).execute().data)
 
         if previous:
@@ -179,7 +183,10 @@ class GradeSync:
             "semester": semester,
             "earned_weight": round(result.earned_weight, 4),
             "graded_weight": round(result.graded_weight, 4),
-            "percentage": round(result.percentage, 2) if result.percentage else None,
+            # A genuine 0% must not be stored as NULL, which would be
+            # indistinguishable from "nothing graded yet".
+            "percentage": (round(result.percentage, 2)
+                           if result.percentage is not None else None),
             "detail": json.loads(json.dumps({
                 "groups": [
                     {
@@ -198,14 +205,15 @@ class GradeSync:
         }).execute()
         self.stats["snapshots"] += 1
 
-    def _push(self, course_page_id: str, result: CourseResult) -> None:
+    def _push(self, result: CourseResult, semester: str,
+              progress_pages: Dict[str, str]) -> None:
         notes: List[str] = list(result.warnings)
 
         for group in result.groups:
             notes.extend(group.warnings)
             dropped = [c.name for c in group.components
                        if not c.is_counted and c.score is not None]
-            self.notion.update_category_row(
+            self.notion.update_component_row(
                 page_id=group.key,
                 marks=group.rollup if group.graded_weight else "",
                 score=(f"{group.earned_weight:.2f} / {group.graded_weight:.2f}"
@@ -219,8 +227,10 @@ class GradeSync:
                     effective_weight=component.effective_weight,
                 )
 
-        self.notion.update_course_row(
-            page_id=course_page_id,
+        progress_pages[result.course.strip().lower()] = self.notion.upsert_progress_row(
+            existing=progress_pages,
+            course=result.course,
+            semester=semester,
             marks=result.marks,
             percent=result.percentage,
             notes="; ".join(notes),
@@ -235,29 +245,56 @@ class GradeSync:
         print(f"Current semester: {semester or '(unset)'}")
         if not semester:
             print("   Set settings.current_semester before syncing grades.")
+            self.stats["failures"] = self.failures
             return self.stats
 
-        in_scope, grouped = self._load(semester)
+        courses = self.notion.fetch_courses()
+        in_scope = [c for c in courses if _key(c["semester"]) == _key(semester)]
+
+        skipped = len(courses) - len(in_scope)
+        if skipped:
+            print(f"   {skipped} course(s) from other semesters ignored")
+
+        for course in courses:
+            if not course["course"]:
+                self.problems.append(
+                    f"course row {course['page_id'][:8]} has no name")
+            elif not course["semester"]:
+                self.problems.append(
+                    f"{course['course']}: no Semester set, so it never syncs")
+
+        progress_pages = self.notion.fetch_progress()
         print(f"Courses in {semester}: {len(in_scope)}")
         print()
 
-        for page_id, course in sorted(in_scope.items(),
-                                      key=lambda kv: kv[1]["course"] or ""):
+        course_ids = self._course_ids()
+
+        for course in sorted(in_scope, key=lambda c: c["course"] or ""):
             code = (course["course"] or "").strip()
             if not code:
                 continue
 
-            groups = grouped.get(page_id, [])
-            counts_by_page = {g.key: g.counted for g in groups}
+            # Per-course isolation. Without it a single unreadable course --
+            # a page unshared from the integration, say -- aborted the whole
+            # run, so later courses never synced and every problem collected
+            # so far was discarded with the loop.
+            try:
+                groups = self._groups_for(code, course["page_id"])
+                counts_by_page = {g.key: g.counted for g in groups}
 
-            result = evaluate_course(code, groups)
-            self._persist(code, semester, result, counts_by_page)
-            self._push(page_id, result)
-            self.stats["courses"] += 1
+                result = evaluate_course(code, groups)
+                self._persist(code, semester, result, counts_by_page,
+                              course_ids.get(_key(code)))
+                self._push(result, semester, progress_pages)
+                self.stats["courses"] += 1
 
-            flag = f"   [{'; '.join(result.warnings)}]" if result.warnings else ""
-            print(f"  {code:10} {len(groups):2} categories   "
-                  f"{result.marks:>18}{flag}")
+                flag = f"   [{'; '.join(result.warnings)}]" if result.warnings else ""
+                print(f"  {code:10} {len(groups):2} components   "
+                      f"{result.marks:>18}{flag}")
+            except Exception as exc:
+                self.failures += 1
+                self.problems.append(f"{code}: sync failed, skipped ({exc})")
+                print(f"  {code:10} FAILED - {exc}")
 
         if self.problems:
             print()
@@ -265,4 +302,5 @@ class GradeSync:
             for problem in self.problems:
                 print(f"  - {problem}")
 
+        self.stats["failures"] = self.failures
         return self.stats

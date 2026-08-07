@@ -16,7 +16,10 @@ from src.utils import get_ist_now
 
 def main() -> int:
     try:
-        Config.validate()
+        # Deliberately NOT Config.validate(): that demands Google, Apple and
+        # Resend credentials, and a rotated Apple password should not be able
+        # to stop grade syncing. validate_notion covers Supabase and Notion,
+        # which is all this job touches.
         Config.validate_notion()
 
         print("Starting grade sync")
@@ -32,6 +35,9 @@ def main() -> int:
             print(f"{label.capitalize() + ':':14} {stats[label]}")
         print("=" * 60)
         print()
+        if stats.get("failures"):
+            print(f"Grade sync finished with {stats['failures']} failed course(s)")
+            return 1
         print("Grade sync completed successfully")
         return 0
 

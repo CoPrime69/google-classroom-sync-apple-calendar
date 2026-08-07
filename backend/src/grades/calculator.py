@@ -12,7 +12,7 @@ any later one.
 """
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 
 @dataclass(frozen=True)
@@ -122,14 +122,18 @@ def _trim(value: float) -> str:
 def evaluate_group(group: Group) -> GroupResult:
     """Compute one group's contribution.
 
-    Components are ranked by score/max, not raw score. With mixed maximums in a
-    group, raw ordering drops the wrong one: 6/20 (30%) is a worse performance
-    than 5/10 (50%) despite being the higher number.
+    Components are ranked by score/max, not raw score. With mixed maximums in
+    a group, raw ordering drops the wrong one: 6/20 (30%) is a worse
+    performance than 5/10 (50%) despite being the higher number.
     """
     warnings: List[str] = []
-    usable: List[Component] = []
 
-    for component in group.components:
+    # Survivors are tracked by position, not by Component.key. Keys are Notion
+    # page ids in practice and so unique, but nothing enforced that, and a
+    # duplicate key made an unrelated component inherit a survivor's weight.
+    usable: List[int] = []
+
+    for index, component in enumerate(group.components):
         if not component.is_graded:
             continue
         if component.max_score is None or component.max_score <= 0:
@@ -137,31 +141,37 @@ def evaluate_group(group: Group) -> GroupResult:
                 f"{component.name}: max score is {component.max_score!r}, skipped"
             )
             continue
-        if component.score is not None and component.score < 0:
+        if component.score < 0:
             warnings.append(f"{component.name}: negative score, skipped")
             continue
-        if component.score is not None and component.score > component.max_score:
+        if component.score > component.max_score:
             warnings.append(
                 f"{component.name}: score {_trim(component.score)} exceeds max "
                 f"{_trim(component.max_score)}, counted as-is"
             )
-        usable.append(component)
+        usable.append(index)
 
-    keep = _keep_count(group, warnings)
+    keep, keep_warning = _keep_count(group)
+    if keep_warning:
+        warnings.append(keep_warning)
 
-    # Rank by fraction descending. Name then key break ties so that a rerun on
-    # unchanged data never silently swaps which component was dropped.
+    def fraction_of(index: int) -> float:
+        component = group.components[index]
+        return component.score / component.max_score
+
+    # Name then index break ties, so a rerun on unchanged data never silently
+    # swaps which component was dropped.
     ranked = sorted(
         usable,
-        key=lambda c: (-(c.score / c.max_score), c.name, c.key),  # type: ignore[operator]
+        key=lambda i: (-fraction_of(i), group.components[i].name, i),
     )
 
-    # Only drop once there is a surplus. While the number graded is at or below
-    # the keep count every one of them counts; the drop starts with the next.
-    survivors = ranked[: min(len(ranked), keep)]
-    survivor_keys = {c.key for c in survivors}
+    # Only drop once there is a surplus. While the number graded is at or
+    # below the keep count every one of them counts; the drop starts with the
+    # next. Slicing already clamps, so no min() is needed.
+    survivors = set(ranked[:keep])
 
-    weight_per_survivor = group.weight / keep if keep else 0.0
+    weight_per_survivor = group.weight / keep
 
     results: List[ComponentResult] = []
     earned_weight = 0.0
@@ -169,22 +179,21 @@ def evaluate_group(group: Group) -> GroupResult:
     raw_scored = 0.0
     raw_total = 0.0
 
-    for component in group.components:
-        counted = component.key in survivor_keys
-        fraction: Optional[float] = None
+    for index, component in enumerate(group.components):
+        counted = index in survivors
+        fraction = fraction_of(index) if index in usable else None
         earned = 0.0
         effective = 0.0
 
-        if component.is_graded and component.max_score:
-            fraction = component.score / component.max_score  # type: ignore[operator]
-
         if counted:
+            # Guaranteed graded with a positive max: only indices in `usable`
+            # can reach here, so no fallbacks are needed.
             effective = weight_per_survivor
-            earned = (fraction or 0.0) * weight_per_survivor
+            earned = fraction * weight_per_survivor
             earned_weight += earned
             graded_weight += weight_per_survivor
-            raw_scored += component.score or 0.0
-            raw_total += component.max_score or 0.0
+            raw_scored += component.score
+            raw_total += component.max_score
 
         results.append(
             ComponentResult(
@@ -213,23 +222,23 @@ def evaluate_group(group: Group) -> GroupResult:
     )
 
 
-def _keep_count(group: Group, warnings: List[str]) -> int:
-    """How many components in this group contribute.
+def _keep_count(group: Group) -> Tuple[int, Optional[str]]:
+    """How many components in this group contribute, plus any warning.
 
     None means every row present counts, which is how a category with an
     open-ended number of items and no drops is expressed. The weight then
     re-splits automatically as rows are added.
+
+    Returns a warning rather than appending to a caller's list, so this module
+    keeps no side effects.
     """
     if group.counted is None:
-        return max(1, len(group.components))
+        return max(1, len(group.components)), None
 
     if group.counted < 1:
-        warnings.append(
-            f"{group.name}: counted is {group.counted}, treating as 1"
-        )
-        return 1
+        return 1, f"{group.name}: counted is {group.counted}, treating as 1"
 
-    return group.counted
+    return group.counted, None
 
 
 def evaluate_course(course: str, groups: Sequence[Group]) -> CourseResult:
@@ -241,6 +250,13 @@ def evaluate_course(course: str, groups: Sequence[Group]) -> CourseResult:
 
     warnings: List[str] = []
 
+    for group in groups:
+        # The only numeric field without its own guard. A negative weight can
+        # cancel a positive one so graded_weight lands on zero, making a course
+        # with real marks report "not graded yet".
+        if group.weight < 0:
+            warnings.append(f"{group.name}: negative weight {_trim(group.weight)}")
+
     total_weight = sum(g.weight for g in groups)
     if groups and abs(total_weight - 100.0) > 0.01:
         # Warn rather than reject or normalise. Rejecting is obnoxious while
@@ -248,12 +264,13 @@ def evaluate_course(course: str, groups: Sequence[Group]) -> CourseResult:
         # genuine data-entry mistake behind a plausible-looking number.
         warnings.append(f"weights sum to {_trim(total_weight)}%, not 100%")
 
-    seen: dict = {}
+    seen: Dict[str, List[str]] = {}
     for g in groups:
-        seen.setdefault(g.name.strip().lower(), []).append(g.key)
-    for name, keys in seen.items():
-        if len(keys) > 1:
-            warnings.append(f"{len(keys)} groups named {name!r}; treated separately")
+        seen.setdefault(g.name.strip().lower(), []).append(g.name)
+    for names in seen.values():
+        if len(names) > 1:
+            # Report the name as typed, not the normalised key.
+            warnings.append(f"{len(names)} groups named {names[0]!r}")
 
     return CourseResult(
         course=course,

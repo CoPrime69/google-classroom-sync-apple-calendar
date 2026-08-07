@@ -42,8 +42,7 @@ class Config:
     # sync runs fine without them.
     NOTION_API_KEY = os.getenv('NOTION_API_KEY')
     NOTION_COURSES_DB_ID = os.getenv('NOTION_COURSES_DB_ID')
-    NOTION_MARKS_DB_ID = os.getenv('NOTION_MARKS_DB_ID')
-    NOTION_CATEGORIES_DB_ID = os.getenv('NOTION_CATEGORIES_DB_ID')
+    NOTION_PROGRESS_DB_ID = os.getenv('NOTION_PROGRESS_DB_ID')
     
     # Alarm intervals (in hours)
     ALARM_INTERVALS = [48, 24, 6, 2]
@@ -73,8 +72,8 @@ class Config:
     @classmethod
     def validate_notion(cls):
         """Checked separately so the calendar sync never depends on Notion."""
-        required = ('NOTION_API_KEY', 'NOTION_COURSES_DB_ID',
-                    'NOTION_MARKS_DB_ID', 'NOTION_CATEGORIES_DB_ID')
+        required = ('SUPABASE_URL', 'SUPABASE_KEY', 'NOTION_API_KEY',
+                    'NOTION_COURSES_DB_ID', 'NOTION_PROGRESS_DB_ID')
         missing = [var for var in required if not getattr(cls, var)]
 
         if missing:
