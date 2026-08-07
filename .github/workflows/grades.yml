@@ -1,0 +1,63 @@
+name: Notion Grade Sync
+
+# Separate from sync.yml on purpose. Grades and calendar reminders fail for
+# different reasons: a Notion outage must not stop assignment reminders being
+# created, and a grade bug must not trigger the calendar sync's failure alert.
+on:
+  schedule:
+    - cron: '0 15 * * *'   # 20:30 IST, once daily
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: grade-sync
+  # Not cancel-in-progress: the job writes Notion pages one at a time, so
+  # cancelling mid-run would leave some rows updated and others stale. A
+  # once-daily job has no real overlap risk anyway.
+  cancel-in-progress: false
+
+jobs:
+  grades:
+    runs-on: ubuntu-latest
+    environment: google-classroom-sync
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Run calculator tests
+        # The grade rules are pure functions, so they are cheap to verify
+        # before touching live data.
+        run: |
+          cd backend
+          python -m pytest tests/ -q
+
+      - name: Run grade sync
+        # Only Supabase and Notion. The grade job never calls Classroom,
+        # CalDAV or Resend, so it is not given those credentials -- a rotated
+        # Apple password must not be able to stop grades syncing.
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+
+          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
+          NOTION_COURSES_DB_ID: ${{ secrets.NOTION_COURSES_DB_ID }}
+          NOTION_PROGRESS_DB_ID: ${{ secrets.NOTION_PROGRESS_DB_ID }}
+        run: |
+          cd backend
+          python grades_main.py
