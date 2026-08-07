@@ -230,14 +230,29 @@ current position is legible at a glance. It is not out of 100: early in the term
 
 ### Course matching and scoping
 
-Notion rows link to courses by `course_code` (CSL7360, MSL4010…), matched
-case-insensitively. Only courses whose `semester` equals
-`settings.current_semester` are processed, reusing the existing filter so past
-semesters are not recomputed.
+Notion rows carry two properties that identify a course: `Course` (a code such
+as CSL7360) and `Semester` (such as `7th sem`). Only rows whose `Semester`
+matches `settings.current_semester` are processed, so previous semesters are
+never recomputed.
 
-A Notion row whose course code matches no course **fails loudly** — the row is
-reported in the job output and flagged in Notion. Silently skipping it would
-mean a typo quietly stops a course from ever updating.
+The `Course` code is matched case-insensitively against `courses.course_code`.
+Matching is a convenience, not a requirement:
+
+- **Match found** — the group links to that course via `course_id`, so grades
+  sit alongside the Classroom data for the same course.
+- **No match** — the course is tracked anyway, keyed on the code string alone
+  with `course_id` left NULL. A warning is printed, not an error.
+
+This second case is essential rather than incidental. Not every course a student
+takes is posted to Google Classroom — a class may be run entirely offline, or
+simply not created by its instructor yet. Requiring a Classroom record would
+make those courses untrackable. Grades are entered by hand regardless, so
+Classroom is not a prerequisite for computing them.
+
+The cost is that a typo in a course code silently creates a second, near-
+duplicate course rather than erroring. The Summary page mitigates this: an
+unmatched code is rendered with a `?` prefix (`?CSL7630`), so a typo shows up as
+an obviously wrong row instead of disappearing.
 
 ## Grade calculation
 
