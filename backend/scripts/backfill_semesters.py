@@ -18,7 +18,14 @@ is passed.
     python scripts/backfill_semesters.py --apply    # write
 """
 
+import os
 import sys
+
+# scripts/README.md documents running these from the backend root. Python puts
+# the script's own directory on sys.path rather than the caller's, so src/ is
+# not importable without this.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from src.classroom.client import ClassroomClient
 from src.database import Database
 
