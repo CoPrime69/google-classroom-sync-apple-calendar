@@ -20,10 +20,47 @@ class Database:
     # COURSES
     # ========================================
     
+    def get_current_semester(self) -> Optional[str]:
+        """
+        The semester currently being synced, from the singleton settings row.
+
+        Returns None if the row or the table is missing, which callers treat as
+        "no semester filter" so a missing migration degrades to the old
+        behaviour instead of syncing nothing.
+        """
+        try:
+            response = (self.client.table('settings')
+                       .select('current_semester')
+                       .eq('id', 1)
+                       .execute())
+        except Exception as e:
+            print(f"   WARNING: could not read settings table: {e}")
+            return None
+
+        if not response.data:
+            return None
+        return response.data[0].get('current_semester')
+
     def get_enabled_courses(self) -> List[Dict[str, Any]]:
-        """Get all enabled courses"""
-        response = self.client.table('courses').select('*').eq('enabled', True).execute()
-        return response.data
+        """
+        Enabled courses belonging to the semester currently being synced.
+
+        `enabled` alone is not sufficient: Classroom keeps returning courses
+        from previous semesters, and whether an old course is ARCHIVED is the
+        teacher's decision rather than the student's, so stale courses stay
+        enabled and keep producing calendar events. When
+        settings.current_semester is set, only courses labelled with it sync.
+        """
+        query = self.client.table('courses').select('*').eq('enabled', True)
+
+        semester = self.get_current_semester()
+        if semester:
+            query = query.eq('semester', semester)
+        else:
+            print("   WARNING: settings.current_semester is unset - "
+                  "syncing every enabled course regardless of semester")
+
+        return query.execute().data
     
     def upsert_course(self, course_data: Dict[str, Any]) -> Dict[str, Any]:
         """Insert or update a course"""

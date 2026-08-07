@@ -12,6 +12,7 @@ interface Course {
   enabled: boolean
   course_code?: string
   calendar_name?: string
+  semester?: string
   sync_without_categories: boolean
 }
 
@@ -25,6 +26,8 @@ interface Category {
 export default function Page() {
   const [courses, setCourses] = useState<Course[]>([])
   const [categories, setCategories] = useState<Record<string, Category[]>>({})
+  const [currentSemester, setCurrentSemester] = useState<string>('')
+  const [onlyCurrentSemester, setOnlyCurrentSemester] = useState(true)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -64,6 +67,16 @@ export default function Page() {
       })
 
       setCategories(grouped)
+
+      // Singleton row (id = 1) holding the semester the sync currently targets.
+      const { data: settingsData, error: settingsError } = await supabase
+        .from('settings')
+        .select('current_semester')
+        .eq('id', 1)
+        .maybeSingle()
+
+      if (settingsError) throw settingsError
+      setCurrentSemester(settingsData?.current_semester || '')
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -85,6 +98,22 @@ export default function Page() {
       ))
     } catch (err) {
       alert(`Failed to update course: ${(err as Error).message}`)
+    }
+  }
+
+  async function updateCurrentSemester(value: string) {
+    const previous = currentSemester
+    setCurrentSemester(value)
+    try {
+      const { error } = await supabase
+        .from('settings')
+        .update({ current_semester: value || null, updated_at: new Date().toISOString() })
+        .eq('id', 1)
+
+      if (error) throw error
+    } catch (err) {
+      setCurrentSemester(previous)
+      alert(`Failed to update current semester: ${(err as Error).message}`)
     }
   }
 
@@ -156,17 +185,49 @@ export default function Page() {
     )
   }
 
+  // A course only produces calendar events when it is enabled AND its semester
+  // matches the current one. With no current semester set the backend applies
+  // no semester filter, so every enabled course qualifies.
+  const matchesSemester = (c: Course) =>
+    !currentSemester || (c.semester || '') === currentSemester
+
+  const visibleCourses = onlyCurrentSemester
+    ? courses.filter(matchesSemester)
+    : courses
+
+  const syncingCount = courses.filter(c => c.enabled && matchesSemester(c)).length
+
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white shadow-sm border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 py-6 flex items-center gap-3">
-          <Bell className="h-8 w-8 text-blue-600" />
-          <div>
+        <div className="max-w-7xl mx-auto px-4 py-6 flex flex-wrap items-center gap-4">
+          <Bell className="h-8 w-8 text-blue-600 shrink-0" />
+          <div className="flex-1 min-w-[240px]">
             <h1 className="text-2xl font-bold text-gray-900">
               Google Classroom Sync
             </h1>
             <p className="text-sm text-gray-600">
               Configure which courses and categories generate calendar events
+            </p>
+          </div>
+
+          {/* Only courses whose semester matches this value are synced. */}
+          <div className="shrink-0">
+            <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-2">
+              Current Semester
+            </label>
+            <input
+              type="text"
+              placeholder="e.g., 7th sem"
+              value={currentSemester}
+              onChange={(e) => setCurrentSemester(e.target.value)}
+              onBlur={(e) => updateCurrentSemester(e.target.value.trim())}
+              className="w-44 px-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 placeholder-gray-500 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition"
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              {currentSemester
+                ? 'Only this semester syncs'
+                : 'Unset — every enabled course syncs'}
             </p>
           </div>
         </div>
@@ -185,13 +246,46 @@ export default function Page() {
           </div>
         ) : (
           <div className="space-y-6">
-            {courses.map(course => (
+            <div className="bg-white rounded-lg border border-gray-200 shadow-sm px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+              <p className="text-sm text-gray-700">
+                <span className="font-semibold text-gray-900">{syncingCount}</span>
+                {' of '}
+                <span className="font-semibold text-gray-900">{courses.length}</span>
+                {' courses will sync'}
+                {currentSemester ? ` for ${currentSemester}` : ' (no semester filter)'}
+              </p>
+              <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={onlyCurrentSemester}
+                  onChange={(e) => setOnlyCurrentSemester(e.target.checked)}
+                  className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                />
+                Hide other semesters
+              </label>
+            </div>
+
+            {visibleCourses.map(course => (
               <div key={course.id} className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden hover:shadow-md transition">
                 {/* Course Header */}
                 <div className="p-6 border-b border-gray-200 bg-gradient-to-r from-gray-50 to-white">
                   <div className="flex items-start justify-between mb-4">
                     <div className="flex-1">
-                      <h2 className="text-lg font-bold text-gray-900">{course.name}</h2>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h2 className="text-lg font-bold text-gray-900">{course.name}</h2>
+                        {course.semester && (
+                          <span className="px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-700 border border-gray-300">
+                            {course.semester}
+                          </span>
+                        )}
+                        {/* Enabled but filtered out by semester is the confusing
+                            case, so call it out explicitly. */}
+                        {course.enabled && !matchesSemester(course) && (
+                          <span className="px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-900 border border-amber-300">
+                            Enabled, but not {currentSemester} — will not sync
+                          </span>
+                        )}
+                      </div>
                       {course.description && (
                         <p className="text-sm text-gray-600 mt-1">{course.description}</p>
                       )}
@@ -219,7 +313,22 @@ export default function Page() {
                   </div>
 
                   {/* Course Configuration Fields */}
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-4">
+                    {/* Semester */}
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-2">
+                        Semester
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g., 7th sem"
+                        value={course.semester || ''}
+                        onChange={(e) => updateCourseField(course.id, 'semester', e.target.value)}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 placeholder-gray-500 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">Must match Current Semester to sync</p>
+                    </div>
+
                     {/* Course Code */}
                     <div>
                       <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-2">

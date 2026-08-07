@@ -46,12 +46,19 @@ class SyncEngine:
         # Step 1: Sync courses and categories
         self._sync_courses_and_categories()
         
-        # Step 2: Get enabled courses
+        # Step 2: Get enabled courses for the semester being synced
+        semester = self.db.get_current_semester()
         enabled_courses = self.db.get_enabled_courses()
-        print(f"\nEnabled courses: {len(enabled_courses)}")
+        print()
+        print(f"Current semester: {semester or '(unset - no semester filter)'}")
+        print(f"Enabled courses: {len(enabled_courses)}")
         
         if not enabled_courses:
-            print("⚠️  No enabled courses. Enable courses in the frontend dashboard.")
+            if semester:
+                print(f"⚠️  No enabled courses for {semester}. "
+                      f"Enable courses and set their semester in the dashboard.")
+            else:
+                print("⚠️  No enabled courses. Enable courses in the frontend dashboard.")
             return self.stats
         
         # Step 3: Process each course
